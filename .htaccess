@@ -1,1 +1,5 @@
 DirectoryIndex sync.php
+
+<Files "data.json">
+  Require all denied
+</Files>
