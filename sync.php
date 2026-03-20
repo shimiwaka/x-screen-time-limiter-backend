@@ -42,6 +42,21 @@ if ($path === '/sync' && $method === 'POST') {
         }
     }
 
+    // 削除済み時間帯をサーバーにも反映（max マージより優先）
+    foreach ($req['deletedHours'] ?? [] as $date => $hours) {
+        if (!isset($store[$token][$date])) continue;
+        foreach ($hours as $h) {
+            $h = (int)$h;
+            if ($h >= 0 && $h < 24) {
+                $store[$token][$date][$h] = 0;
+            }
+        }
+        // 全時間が0なら日付ごと削除
+        if (array_sum($store[$token][$date]) === 0) {
+            unset($store[$token][$date]);
+        }
+    }
+
     file_put_contents($DATA_FILE, json_encode($store));
     echo json_encode(['usage' => $store[$token]]);
     exit;
