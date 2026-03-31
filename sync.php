@@ -22,43 +22,70 @@ if ($path === '/sync' && $method === 'POST') {
     $body = file_get_contents('php://input');
     $req  = json_decode($body, true);
 
-    if (!$req)                  { echo '{"error":"invalid json"}';  exit; }
+    if (!$req)       { echo '{"error":"invalid json"}';  exit; }
     $token = $req['token'] ?? '';
-    if (!$token)                { echo '{"error":"token required"}'; exit; }
+    if (!$token)     { echo '{"error":"token required"}'; exit; }
 
     $store = [];
     if (file_exists($DATA_FILE)) {
         $store = json_decode(file_get_contents($DATA_FILE), true) ?? [];
     }
 
-    if (!isset($store[$token])) $store[$token] = [];
+    if (!isset($store[$token])) {
+        $store[$token] = ['usage' => [], 'deletedHours' => []];
+    }
 
-    // クライアントデータをマージ（各時間帯の最大値を採用）
+    // 旧データ形式（usage/deletedHours キーなし、日付が直接並んでいる）を新形式に移行
+    if (!array_key_exists('usage', $store[$token])) {
+        $store[$token] = ['usage' => $store[$token], 'deletedHours' => []];
+    }
+
+    // クライアントの usage をマージ（各時間帯の最大値を採用）
     foreach ($req['usage'] ?? [] as $date => $hours) {
-        if (count($hours) !== 24) continue;
-        if (!isset($store[$token][$date])) $store[$token][$date] = array_fill(0, 24, 0);
+        if (!is_array($hours) || count($hours) !== 24) continue;
+        if (!isset($store[$token]['usage'][$date])) {
+            $store[$token]['usage'][$date] = array_fill(0, 24, 0);
+        }
         for ($h = 0; $h < 24; $h++) {
-            $store[$token][$date][$h] = max($store[$token][$date][$h], $hours[$h] ?? 0);
+            $store[$token]['usage'][$date][$h] = max(
+                $store[$token]['usage'][$date][$h],
+                $hours[$h] ?? 0
+            );
         }
     }
 
-    // 削除済み時間帯をサーバーにも反映（max マージより優先）
+    // クライアントの deletedHours をサーバーの削除リストに累積（全端末の union）
     foreach ($req['deletedHours'] ?? [] as $date => $hours) {
-        if (!isset($store[$token][$date])) continue;
+        if (!isset($store[$token]['deletedHours'][$date])) {
+            $store[$token]['deletedHours'][$date] = [];
+        }
+        $merged = array_unique(array_merge(
+            $store[$token]['deletedHours'][$date],
+            array_map('intval', $hours)
+        ));
+        $store[$token]['deletedHours'][$date] = array_values($merged);
+    }
+
+    // 累積された全端末の deletedHours を usage に適用（max マージより優先）
+    foreach ($store[$token]['deletedHours'] as $date => $hours) {
+        if (!isset($store[$token]['usage'][$date])) continue;
         foreach ($hours as $h) {
-            $h = (int)$h;
             if ($h >= 0 && $h < 24) {
-                $store[$token][$date][$h] = 0;
+                $store[$token]['usage'][$date][$h] = 0;
             }
         }
-        // 全時間が0なら日付ごと削除
-        if (array_sum($store[$token][$date]) === 0) {
-            unset($store[$token][$date]);
+        if (array_sum($store[$token]['usage'][$date]) === 0) {
+            unset($store[$token]['usage'][$date]);
         }
     }
 
     file_put_contents($DATA_FILE, json_encode($store));
-    echo json_encode(['usage' => $store[$token]]);
+
+    // deletedHours も返すことでクライアントが他端末の削除情報を受け取れる
+    echo json_encode([
+        'usage'        => $store[$token]['usage'],
+        'deletedHours' => $store[$token]['deletedHours'],
+    ]);
     exit;
 }
 
