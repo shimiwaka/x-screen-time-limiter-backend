@@ -32,12 +32,17 @@ if ($path === '/sync' && $method === 'POST') {
     }
 
     if (!isset($store[$token])) {
-        $store[$token] = ['usage' => [], 'deletedHours' => []];
+        $store[$token] = ['usage' => [], 'deletedAt' => []];
     }
 
-    // 旧データ形式（usage/deletedHours キーなし、日付が直接並んでいる）を新形式に移行
+    // 旧データ形式（usage/deletedAt キーなし、日付が直接並んでいる）を新形式に移行
     if (!array_key_exists('usage', $store[$token])) {
-        $store[$token] = ['usage' => $store[$token], 'deletedHours' => []];
+        $store[$token] = ['usage' => $store[$token], 'deletedAt' => []];
+    }
+
+    // deletedHours 形式の古いデータがある場合、deletedAt に移行する
+    if (isset($store[$token]['deletedHours'])) {
+        unset($store[$token]['deletedHours']);
     }
 
     // クライアントの usage をマージ（各時間帯の最大値を採用）
@@ -54,37 +59,38 @@ if ($path === '/sync' && $method === 'POST') {
         }
     }
 
-    // クライアントの deletedHours をサーバーの削除リストに累積（全端末の union）
-    foreach ($req['deletedHours'] ?? [] as $date => $hours) {
-        if (!isset($store[$token]['deletedHours'][$date])) {
-            $store[$token]['deletedHours'][$date] = [];
+    // クライアントの deletedAt をサーバーに累積（hour ごとに最も古い削除時刻を採用）
+    foreach ($req['deletedAt'] ?? [] as $date => $hours) {
+        if (!is_array($hours)) continue;
+        if (!isset($store[$token]['deletedAt'][$date])) {
+            $store[$token]['deletedAt'][$date] = [];
         }
-        $merged = array_unique(array_merge(
-            $store[$token]['deletedHours'][$date],
-            array_map('intval', $hours)
-        ));
-        $store[$token]['deletedHours'][$date] = array_values($merged);
-    }
-
-    // 累積された全端末の deletedHours を usage に適用（max マージより優先）
-    foreach ($store[$token]['deletedHours'] as $date => $hours) {
-        if (!isset($store[$token]['usage'][$date])) continue;
-        foreach ($hours as $h) {
-            if ($h >= 0 && $h < 24) {
-                $store[$token]['usage'][$date][$h] = 0;
+        foreach ($hours as $hour => $timestamp) {
+            $h = (int)$hour;
+            $ts = (int)$timestamp;
+            if (!isset($store[$token]['deletedAt'][$date][$h])) {
+                $store[$token]['deletedAt'][$date][$h] = $ts;
+            } else {
+                // より古い（小さい）削除時刻を採用
+                $store[$token]['deletedAt'][$date][$h] = min(
+                    $store[$token]['deletedAt'][$date][$h],
+                    $ts
+                );
             }
         }
-        if (array_sum($store[$token]['usage'][$date]) === 0) {
-            unset($store[$token]['usage'][$date]);
-        }
     }
+
+    // deletedAt は時刻ベースの管理に変更したため、
+    // サーバー側では強制ゼロは行わず、クライアント側のマージロジックに任せる
+    // サーバーは各端末の deletedAt を累積して返すだけ
+    // （旧: deletedHours で全時間を強制ゼロにしていた）
 
     file_put_contents($DATA_FILE, json_encode($store));
 
-    // deletedHours も返すことでクライアントが他端末の削除情報を受け取れる
+    // deletedAt を返すことでクライアントが他端末の削除情報を受け取れる
     echo json_encode([
         'usage'        => $store[$token]['usage'],
-        'deletedHours' => $store[$token]['deletedHours'],
+        'deletedAt'    => $store[$token]['deletedAt'],
     ]);
     exit;
 }
