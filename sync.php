@@ -80,10 +80,14 @@ if ($path === '/sync' && $method === 'POST') {
         }
     }
 
-    // deletedAt は時刻ベースの管理に変更したため、
-    // サーバー側では強制ゼロは行わず、クライアント側のマージロジックに任せる
-    // サーバーは各端末の deletedAt を累積して返すだけ
-    // （旧: deletedHours で全時間を強制ゼロにしていた）
+    // deletedAt でマークされた時間帯は usage をゼロ化
+    foreach ($store[$token]['deletedAt'] as $date => $hours) {
+        foreach ($hours as $h => $timestamp) {
+            if (isset($store[$token]['usage'][$date][$h])) {
+                $store[$token]['usage'][$date][$h] = 0;
+            }
+        }
+    }
 
     file_put_contents($DATA_FILE, json_encode($store));
 
