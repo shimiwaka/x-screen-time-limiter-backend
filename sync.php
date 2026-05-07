@@ -80,15 +80,6 @@ if ($path === '/sync' && $method === 'POST') {
         }
     }
 
-    // deletedAt でマークされた時間帯は usage をゼロ化
-    foreach ($store[$token]['deletedAt'] as $date => $hours) {
-        foreach ($hours as $h => $timestamp) {
-            if (isset($store[$token]['usage'][$date][$h])) {
-                $store[$token]['usage'][$date][$h] = 0;
-            }
-        }
-    }
-
     file_put_contents($DATA_FILE, json_encode($store));
 
     // deletedAt を返すことでクライアントが他端末の削除情報を受け取れる
