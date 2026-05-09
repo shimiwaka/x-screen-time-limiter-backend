@@ -45,38 +45,58 @@ if ($path === '/sync' && $method === 'POST') {
         unset($store[$token]['deletedHours']);
     }
 
-    // クライアントの usage をマージ（各時間帯の最大値を採用）
-    foreach ($req['usage'] ?? [] as $date => $hours) {
-        if (!is_array($hours) || count($hours) !== 24) continue;
-        if (!isset($store[$token]['usage'][$date])) {
-            $store[$token]['usage'][$date] = array_fill(0, 24, 0);
-        }
-        for ($h = 0; $h < 24; $h++) {
-            $store[$token]['usage'][$date][$h] = max(
-                $store[$token]['usage'][$date][$h],
-                $hours[$h] ?? 0
-            );
-        }
-    }
+    // hour 単位 (deletedAt, value) マージ: deletedAt は max、value は新しい deletedAt 側のみ採用候補にして max。
+    $clientUsage     = $req['usage'] ?? [];
+    $clientDeletedAt = $req['deletedAt'] ?? [];
 
-    // クライアントの deletedAt をサーバーに累積（hour ごとに最も古い削除時刻を採用）
-    foreach ($req['deletedAt'] ?? [] as $date => $hours) {
-        if (!is_array($hours)) continue;
-        if (!isset($store[$token]['deletedAt'][$date])) {
-            $store[$token]['deletedAt'][$date] = [];
+    $allDates = array_unique(array_merge(
+        array_keys($store[$token]['usage']),
+        array_keys($store[$token]['deletedAt']),
+        is_array($clientUsage) ? array_keys($clientUsage) : [],
+        is_array($clientDeletedAt) ? array_keys($clientDeletedAt) : []
+    ));
+
+    foreach ($allDates as $date) {
+        $serverHours    = $store[$token]['usage'][$date]     ?? array_fill(0, 24, 0);
+        $serverDeleted  = $store[$token]['deletedAt'][$date] ?? [];
+        $clientHours    = $clientUsage[$date]     ?? array_fill(0, 24, 0);
+        $clientDeleted  = $clientDeletedAt[$date] ?? [];
+
+        if (!is_array($serverHours)   || count($serverHours)   !== 24) $serverHours   = array_fill(0, 24, 0);
+        if (!is_array($clientHours)   || count($clientHours)   !== 24) $clientHours   = array_fill(0, 24, 0);
+        if (!is_array($serverDeleted)) $serverDeleted = [];
+        if (!is_array($clientDeleted)) $clientDeleted = [];
+
+        $newHours   = array_fill(0, 24, 0);
+        $newDeleted = [];
+
+        for ($h = 0; $h < 24; $h++) {
+            $sd = isset($serverDeleted[$h]) ? (int)$serverDeleted[$h] : 0;
+            $cd = isset($clientDeleted[$h]) ? (int)$clientDeleted[$h] : 0;
+            $md = max($sd, $cd);
+            if ($md > 0) $newDeleted[$h] = $md;
+
+            $sv = (int)($serverHours[$h] ?? 0);
+            $cv = (int)($clientHours[$h] ?? 0);
+            $val = 0;
+            if ($sd >= $cd) $val = max($val, $sv);
+            if ($cd >= $sd) $val = max($val, $cv);
+            $newHours[$h] = $val;
         }
-        foreach ($hours as $hour => $timestamp) {
-            $h = (int)$hour;
-            $ts = (int)$timestamp;
-            if (!isset($store[$token]['deletedAt'][$date][$h])) {
-                $store[$token]['deletedAt'][$date][$h] = $ts;
+
+        // すべての値が 0 かつ削除マークも無ければ日付ごと除外
+        $hasUsage = false;
+        foreach ($newHours as $v) { if ($v > 0) { $hasUsage = true; break; } }
+        if ($hasUsage || count($newDeleted) > 0) {
+            $store[$token]['usage'][$date] = $newHours;
+            if (count($newDeleted) > 0) {
+                $store[$token]['deletedAt'][$date] = $newDeleted;
             } else {
-                // より古い（小さい）削除時刻を採用
-                $store[$token]['deletedAt'][$date][$h] = min(
-                    $store[$token]['deletedAt'][$date][$h],
-                    $ts
-                );
+                unset($store[$token]['deletedAt'][$date]);
             }
+        } else {
+            unset($store[$token]['usage'][$date]);
+            unset($store[$token]['deletedAt'][$date]);
         }
     }
 
