@@ -1,4 +1,9 @@
-DirectoryIndex sync.php
+DirectoryIndex sync.cgi
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^sync\.php(/.*)?$ sync.cgi$1 [L]
+</IfModule>
 
 <Files "data.json">
   Require all denied
